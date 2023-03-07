@@ -39,6 +39,8 @@ function Level:init()
             if sumVel > 20 then
                 table.insert(self.destroyedBodies, obstacleFixture:getBody())
             end
+
+            self.collided = true
         end
 
         -- if we collided between an obstacle and an alien, as by debris falling...
@@ -71,12 +73,16 @@ function Level:init()
             if sumVel > 20 then
                 table.insert(self.destroyedBodies, alienFixture:getBody())
             end
+
+            self.collided = true
         end
 
         -- if we hit the ground, play a bounce sound
         if types['Player'] and types['Ground'] then
             gSounds['bounce']:stop()
             gSounds['bounce']:play()
+
+            self.collided = true
         end
     end
 
@@ -106,6 +112,10 @@ function Level:init()
 
     -- obstacles guarding aliens that we can destroy
     self.obstacles = {}
+
+    -- flag if player has hit an obstacle - split allowed only beforehand
+    self.collided = false
+    self.spawned = false
 
     -- simple edge shape to represent collision for ground
     self.edgeShape = love.physics.newEdgeShape(0, 0, VIRTUAL_WIDTH * 3, 0)
@@ -139,6 +149,50 @@ function Level:update(dt)
     -- Box2D world update code; resolves collisions and processes callbacks
     self.world:update(dt)
 
+    -- replace launch marker if original alien stopped moving
+    if self.launchMarker.launched then
+
+        -- spawn 2 new aliens if allowed
+        if love.keyboard.wasPressed('space') and not self.collided then
+
+            local xPos, yPos = self.launchMarker.aliens[1].body:getPosition()
+            local xVel, yVel = self.launchMarker.aliens[1].body:getLinearVelocity()
+            gSounds['kill']:play()
+
+            for i = 1, 2 do
+                table.insert(self.launchMarker.aliens, Alien(self.world, 'round', xPos, yPos, 'Player'))
+            end
+
+            for i = 1, #self.launchMarker.aliens do
+                self.launchMarker.aliens[i].body:setLinearVelocity(xVel + (i - 2) * 100, yVel + (i - 2) * 100)
+                self.launchMarker.aliens[i].fixture:setRestitution(0.4)
+                self.launchMarker.aliens[i].body:setAngularDamping(1)
+            end
+
+            self.collided = true
+            self.spawned = true
+        end
+        
+        -- if we fired our alien to the left or it's almost done rolling, respawn
+        if #self.launchMarker.aliens > 0 then
+            for i = 1, #self.launchMarker.aliens do
+                local xPos, yPos = self.launchMarker.aliens[i].body:getPosition()
+                local xVel, yVel = self.launchMarker.aliens[i].body:getLinearVelocity()
+                if xPos < 0 or xPos > VIRTUAL_WIDTH or (math.abs(xVel) + math.abs(yVel) < 1.5) then
+                    table.insert(self.destroyedBodies, self.launchMarker.aliens[i].fixture:getBody())
+                end
+            end
+        else
+            self.collided = false
+            self.launchMarker = AlienLaunchMarker(self.world)
+            
+            -- re-initialize level if we have no more aliens
+            if #self.aliens == 0 then
+                gStateMachine:change('start')
+            end
+        end
+    end
+
     -- destroy all bodies we calculated to destroy during the update call
     for k, body in pairs(self.destroyedBodies) do
         if not body:isDestroyed() then 
@@ -170,19 +224,11 @@ function Level:update(dt)
         end
     end
 
-    -- replace launch marker if original alien stopped moving
+    -- remove all destroyed players from level
     if self.launchMarker.launched then
-        local xPos, yPos = self.launchMarker.alien.body:getPosition()
-        local xVel, yVel = self.launchMarker.alien.body:getLinearVelocity()
-        
-        -- if we fired our alien to the left or it's almost done rolling, respawn
-        if xPos < 0 or (math.abs(xVel) + math.abs(yVel) < 1.5) then
-            self.launchMarker.alien.body:destroy()
-            self.launchMarker = AlienLaunchMarker(self.world)
-
-            -- re-initialize level if we have no more aliens
-            if #self.aliens == 0 then
-                gStateMachine:change('start')
+        for i = #self.launchMarker.aliens, 1, -1 do
+            if self.launchMarker.aliens[i].body:isDestroyed() then
+                table.remove(self.launchMarker.aliens, i)
             end
         end
     end
